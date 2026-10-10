@@ -109,14 +109,18 @@ function broadcastToRoom(roomId: string, message: any, excludeWs?: WebSocket) {
 function getRoomMemberList(roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return [];
-  const list: { id: string; name: string; color: string }[] = [];
+  const memberMap = new Map<string, { id: string; name: string; color: string }>();
   for (const client of room.clients) {
     const meta = clientMetadata.get(client);
-    if (meta) {
-      list.push({ id: meta.userId, name: meta.userName, color: meta.color });
+    if (meta && !memberMap.has(meta.userId)) {
+      memberMap.set(meta.userId, {
+        id: meta.userId,
+        name: meta.userName,
+        color: meta.color,
+      });
     }
   }
-  return list;
+  return Array.from(memberMap.values());
 }
 
 wss.on('connection', (ws: WebSocket) => {
@@ -187,7 +191,7 @@ wss.on('connection', (ws: WebSocket) => {
               type: 'room_state',
               roomId,
               guilds: room.guilds,
-              userCount: room.clients.size,
+              userCount: members.length,
               members,
               self: { id: userId, name: userName, color: meta.color },
             })
@@ -201,7 +205,7 @@ wss.on('connection', (ws: WebSocket) => {
               userId,
               userName,
               color: meta.color,
-              userCount: room.clients.size,
+              userCount: members.length,
               members,
             },
             ws
@@ -343,21 +347,37 @@ wss.on('connection', (ws: WebSocket) => {
       const room = rooms.get(meta.roomId);
       if (room) {
         room.clients.delete(ws);
-        const members = getRoomMemberList(meta.roomId);
-        broadcastToRoom(meta.roomId, {
-          type: 'user_left',
-          userId: meta.userId,
-          userName: meta.userName,
-          userCount: room.clients.size,
-          members,
-        });
+        clientMetadata.delete(ws);
 
-        // Clean up empty room after 1 hour if inactive
-        if (room.clients.size === 0) {
-          // Keep state for reconnection, don't delete immediately
+        // Check if user still has other active connections in the room
+        let userStillConnected = false;
+        for (const client of room.clients) {
+          const otherMeta = clientMetadata.get(client);
+          if (otherMeta && otherMeta.userId === meta.userId) {
+            userStillConnected = true;
+            break;
+          }
         }
+
+        const members = getRoomMemberList(meta.roomId);
+        if (!userStillConnected) {
+          broadcastToRoom(meta.roomId, {
+            type: 'user_left',
+            userId: meta.userId,
+            userName: meta.userName,
+            userCount: members.length,
+            members,
+          });
+        } else {
+          broadcastToRoom(meta.roomId, {
+            type: 'members_updated',
+            members,
+            userCount: members.length,
+          });
+        }
+      } else {
+        clientMetadata.delete(ws);
       }
-      clientMetadata.delete(ws);
     }
   });
 });

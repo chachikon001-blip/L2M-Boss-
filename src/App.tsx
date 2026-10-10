@@ -308,7 +308,7 @@ export default function App() {
     } else {
       const newGuild: Guild = {
         ...guildData,
-        id: Date.now(),
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         updatedAt: Date.now(),
         lastUpdatedBy: userName,
       };
@@ -326,7 +326,7 @@ export default function App() {
     if (!batchPasteList || batchPasteList.length === 0) return;
 
     const newGuilds: Guild[] = batchPasteList.map((item, idx) => ({
-      id: Date.now() + idx,
+      id: `${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
       name: item.name,
       level: item.level || '1 คนเช็คชื่อ',
       icon: EMBLEM_PRESETS[idx % EMBLEM_PRESETS.length].url,
@@ -685,9 +685,9 @@ export default function App() {
         {/* Guild Cards Grid */}
         {filteredGuilds.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredGuilds.map((guild) => (
+            {filteredGuilds.map((guild, idx) => (
               <GuildCard
-                key={guild.id}
+                key={`${guild.id || idx}`}
                 guild={guild}
                 onToggleStatus={handleToggleStatus}
                 onEditGuild={(g) => {

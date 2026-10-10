@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Users, Link2, Copy, Check, Radio, Edit3, Sparkles, RefreshCw, LogIn } from 'lucide-react';
 import type { RoomMember } from '../utils/useRealtimeSync.ts';
 import { soundFx } from '../utils/sound.ts';
@@ -32,6 +32,18 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
   const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
   const [newRoomInput, setNewRoomInput] = useState('');
   const [newUserNameInput, setNewUserNameInput] = useState('');
+
+  // Strictly deduplicate members by id to guarantee unique items
+  const uniqueMembers = useMemo(() => {
+    if (!Array.isArray(members)) return [];
+    const map = new Map<string, RoomMember>();
+    for (const m of members) {
+      if (m && m.id && !map.has(m.id)) {
+        map.set(m.id, m);
+      }
+    }
+    return Array.from(map.values());
+  }, [members]);
 
   const handleCopyLink = async () => {
     const link = getShareableLink();
@@ -120,17 +132,19 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
             <div
               onClick={handleOpenRoomSettings}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 cursor-pointer hover:border-slate-700 transition-colors"
-              title={`เพื่อนออนไลน์ในห้องนี้: ${members.map((m) => m.name).join(', ') || userName}`}
+              title={`เพื่อนออนไลน์ในห้องนี้: ${uniqueMembers.map((m) => m.name).join(', ') || userName}`}
             >
               <Users className="w-3.5 h-3.5 text-cyan-400" />
               <span>ออนไลน์:</span>
-              <span className="font-bold text-cyan-300 font-mono">{userCount} คน</span>
+              <span className="font-bold text-cyan-300 font-mono">
+                {Math.max(userCount, uniqueMembers.length, 1)} คน
+              </span>
 
               {/* Mini member avatar dots */}
               <div className="flex -space-x-1.5 ml-1">
-                {members.slice(0, 4).map((member) => (
+                {uniqueMembers.slice(0, 4).map((member, index) => (
                   <div
-                    key={member.id}
+                    key={`${member.id}-${index}`}
                     style={{ backgroundColor: member.color }}
                     className="w-4 h-4 rounded-full ring-2 ring-slate-900 flex items-center justify-center text-[9px] font-bold text-white uppercase shadow-sm"
                     title={member.name}
@@ -240,15 +254,15 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
               </div>
 
               {/* Member list in current room */}
-              {members.length > 0 && (
+              {uniqueMembers.length > 0 && (
                 <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
                   <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-                    เพื่อนที่กำลังออนไลน์ในห้องนี้ ({members.length} คน):
+                    เพื่อนที่กำลังออนไลน์ในห้องนี้ ({uniqueMembers.length} คน):
                   </span>
                   <div className="flex flex-wrap gap-2">
-                    {members.map((m) => (
+                    {uniqueMembers.map((m, index) => (
                       <div
-                        key={m.id}
+                        key={`${m.id}-${index}`}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200"
                       >
                         <span
