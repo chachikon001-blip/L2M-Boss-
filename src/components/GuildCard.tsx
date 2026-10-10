@@ -101,7 +101,7 @@ export const GuildCard: React.FC<GuildCardProps> = ({
                 </h3>
                 {guild.status && (
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
-                    ตีแล้ว
+                    ตีแล้ว{guild.lastUpdatedBy ? ` · ${guild.lastUpdatedBy}` : ''}
                   </span>
                 )}
               </div>

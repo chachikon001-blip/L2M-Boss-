@@ -7,6 +7,7 @@ export interface Guild {
   status: boolean;
   targetBoss?: string;
   updatedAt?: number;
+  lastUpdatedBy?: string;
 }
 
 export type StatusFilter = 'all' | 'pending' | 'cleared';

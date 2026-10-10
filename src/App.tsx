@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Plus, Search, Filter, Sparkles, CheckCircle2, Clock, AlertCircle, RefreshCw, Clipboard, Check, X, Layers, ArrowUpDown } from 'lucide-react';
 import type { Guild, StatusFilter, NoteFilter } from './types.ts';
 import { INITIAL_GUILDS, EMBLEM_PRESETS } from './utils/presets.ts';
@@ -11,6 +11,8 @@ import { GuildModal } from './components/GuildModal.tsx';
 import { ShareSummaryModal } from './components/ShareSummaryModal.tsx';
 import { DataBackupModal } from './components/DataBackupModal.tsx';
 import { ClanEmblemPicker } from './components/ClanEmblemPicker.tsx';
+import { RealtimeRoomBar } from './components/RealtimeRoomBar.tsx';
+import { useRealtimeSync } from './utils/useRealtimeSync.ts';
 
 const STORAGE_KEY = 'boss_tracker_guilds';
 const LAST_CYCLE_KEY = 'boss_tracker_last_cycle_timestamp';
@@ -112,6 +114,66 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(guilds));
   }, [guilds]);
 
+  const guildsRef = useRef<Guild[]>(guilds);
+  useEffect(() => {
+    guildsRef.current = guilds;
+  }, [guilds]);
+
+  // Real-time synchronization hook for multi-user collaboration
+  const {
+    isConnected,
+    isSyncing,
+    roomId,
+    userCount,
+    members,
+    userName,
+    setUserName,
+    switchRoom,
+    broadcastGuildsUpdate,
+    broadcastToggleStatus,
+    broadcastResetAll,
+    broadcastMarkAllCleared,
+    getShareableLink,
+  } = useRealtimeSync({
+    getCurrentGuilds: () => guildsRef.current,
+    onRemoteGuildsUpdate: (remoteGuilds, senderName, actionDesc) => {
+      setGuilds(remoteGuilds);
+      soundFx.playCheck();
+      showToast(`⚡ ${senderName}: ${actionDesc || 'อัปเดตข้อมูลกิลด์'}`);
+    },
+    onRemoteStatusChanged: (guildId, newStatus, guildName, senderName) => {
+      setGuilds((prev) =>
+        prev.map((g) =>
+          g.id === guildId
+            ? { ...g, status: newStatus, updatedAt: Date.now(), lastUpdatedBy: senderName }
+            : g
+        )
+      );
+      if (newStatus) {
+        soundFx.playVictory();
+        showToast(`🏆 ${senderName} ตีบอส "${guildName || 'กิลด์'}" สำเร็จแล้ว!`);
+      } else {
+        soundFx.playUncheck();
+        showToast(`🔄 ${senderName} เปลี่ยน "${guildName || 'กิลด์'}" เป็น ยังไม่ได้ตี`);
+      }
+    },
+    onRemoteResetAll: (senderName) => {
+      setGuilds((prev) => prev.map((g) => ({ ...g, status: false, updatedAt: Date.now() })));
+      soundFx.playReset();
+      showToast(`⚠️ ${senderName} รีเซ็ตสถานะกิลด์ทั้งหมดกลับเป็น ยังไม่ได้ตี`);
+    },
+    onRemoteClearedAll: (senderName) => {
+      setGuilds((prev) =>
+        prev.map((g) => ({ ...g, status: true, updatedAt: Date.now(), lastUpdatedBy: senderName }))
+      );
+      soundFx.playVictory();
+      showToast(`🎉 ${senderName} ทำเครื่องหมายว่าตีครบทุกกิลด์แล้ว!`);
+    },
+    onRemoteUserJoined: (joinedUser) => {
+      showToast(`👋 ${joinedUser} ได้เข้าร่วมห้องเรียลไทม์`);
+    },
+  });
+
   // Global Ctrl+V listener
   useEffect(() => {
     const handleGlobalPaste = async (e: ClipboardEvent) => {
@@ -203,36 +265,60 @@ export default function App() {
     const currentCycleStart = getLastResetDate().getTime();
     localStorage.setItem(LAST_CYCLE_KEY, String(currentCycleStart));
     if (shouldResetStatuses) {
-      setGuilds((prev) => prev.map((g) => ({ ...g, status: false })));
+      const updated = guilds.map((g) => ({ ...g, status: false, updatedAt: Date.now() }));
+      setGuilds(updated);
+      broadcastResetAll();
       soundFx.playReset();
+      showToast('🔄 รีเซ็ตรอบสัปดาห์ใหม่เรียบร้อยแล้ว!');
     }
     setShowNewCycleAlert(false);
   };
 
   const handleToggleStatus = (id: string | number) => {
-    setGuilds((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, status: !g.status, updatedAt: Date.now() } : g))
-    );
+    let nextStatus = false;
+    let targetGuildName = '';
+    const updated = guilds.map((g) => {
+      if (g.id === id) {
+        nextStatus = !g.status;
+        targetGuildName = g.name;
+        return {
+          ...g,
+          status: nextStatus,
+          updatedAt: Date.now(),
+          lastUpdatedBy: userName,
+        };
+      }
+      return g;
+    });
+    setGuilds(updated);
+    broadcastToggleStatus(id, nextStatus, targetGuildName);
   };
 
   const handleSaveGuild = (
     guildData: Omit<Guild, 'id' | 'updatedAt'>,
     idToEdit?: string | number
   ) => {
+    let nextGuilds: Guild[];
     if (idToEdit !== undefined && idToEdit !== null) {
-      setGuilds((prev) =>
-        prev.map((g) =>
-          g.id === idToEdit ? { ...g, ...guildData, updatedAt: Date.now() } : g
-        )
+      nextGuilds = guilds.map((g) =>
+        g.id === idToEdit
+          ? { ...g, ...guildData, updatedAt: Date.now(), lastUpdatedBy: userName }
+          : g
       );
     } else {
       const newGuild: Guild = {
         ...guildData,
         id: Date.now(),
         updatedAt: Date.now(),
+        lastUpdatedBy: userName,
       };
-      setGuilds((prev) => [newGuild, ...prev]);
+      nextGuilds = [newGuild, ...guilds];
     }
+    setGuilds(nextGuilds);
+    broadcastGuildsUpdate(
+      nextGuilds,
+      idToEdit ? `แก้ไขข้อมูลกิลด์ "${guildData.name}"` : `เพิ่มกิลด์ใหม่ "${guildData.name}"`
+    );
     setInitialGuildData(null);
   };
 
@@ -248,24 +334,42 @@ export default function App() {
       targetBoss: item.targetBoss,
       status: false,
       updatedAt: Date.now(),
+      lastUpdatedBy: userName,
     }));
 
-    setGuilds((prev) => [...newGuilds, ...prev]);
+    const nextGuilds = [...newGuilds, ...guilds];
+    setGuilds(nextGuilds);
+    broadcastGuildsUpdate(nextGuilds, `เพิ่มกิลด์ ${newGuilds.length} รายการ (Ctrl+V)`);
     soundFx.playVictory();
     showToast(`🎉 เพิ่มกิลด์ทั้งหมด ${newGuilds.length} รายการเรียบร้อยแล้ว!`);
     setBatchPasteList(null);
   };
 
   const handleDeleteGuild = (id: string | number) => {
-    setGuilds((prev) => prev.filter((g) => g.id !== id));
+    const deleted = guilds.find((g) => g.id === id);
+    const remaining = guilds.filter((g) => g.id !== id);
+    setGuilds(remaining);
+    broadcastGuildsUpdate(remaining, `ลบกิลด์ "${deleted?.name || ''}"`);
+    showToast(`ลบกิลด์ "${deleted?.name || ''}" สำเร็จ`);
   };
 
   const handleResetAll = () => {
-    setGuilds((prev) => prev.map((g) => ({ ...g, status: false })));
+    const updated = guilds.map((g) => ({ ...g, status: false, updatedAt: Date.now() }));
+    setGuilds(updated);
+    broadcastResetAll();
+    showToast('🔄 รีเซ็ตกิลด์ทั้งหมดเป็น "ยังไม่ได้ตี" สำเร็จ');
   };
 
   const handleMarkAllCleared = () => {
-    setGuilds((prev) => prev.map((g) => ({ ...g, status: true })));
+    const updated = guilds.map((g) => ({
+      ...g,
+      status: true,
+      updatedAt: Date.now(),
+      lastUpdatedBy: userName,
+    }));
+    setGuilds(updated);
+    broadcastMarkAllCleared();
+    showToast('🎉 ทำเครื่องหมายกิลด์ทั้งหมดเป็น "ตีแล้ว" สำเร็จ');
   };
 
   const handleToggleSound = () => {
@@ -276,11 +380,13 @@ export default function App() {
   const handleImportGuilds = (imported: Guild[]) => {
     setGuilds(imported);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(imported));
+    broadcastGuildsUpdate(imported, 'นำเข้าไฟล์สำรองข้อมูลกิลด์');
   };
 
   const handleResetToDefaults = () => {
     setGuilds(INITIAL_GUILDS);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_GUILDS));
+    broadcastGuildsUpdate(INITIAL_GUILDS, 'รีเซ็ตข้อมูลเป็นค่าเริ่มต้น');
   };
 
   // Filter and sort guilds:
@@ -375,6 +481,20 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Real-time Multi-User Room Sync & Live Link Sharing */}
+        <RealtimeRoomBar
+          isConnected={isConnected}
+          isSyncing={isSyncing}
+          roomId={roomId}
+          userCount={userCount}
+          members={members}
+          userName={userName}
+          onUpdateUserName={setUserName}
+          onSwitchRoom={switchRoom}
+          getShareableLink={getShareableLink}
+          showToast={showToast}
+        />
 
         {/* Header & Weekly Reset Countdown */}
         <ResetTimerCard
