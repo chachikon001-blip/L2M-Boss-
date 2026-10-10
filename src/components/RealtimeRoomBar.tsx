@@ -121,21 +121,12 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
             </div>
 
             {/* Vercel / Cloud Ready Indicator */}
-            {activeServerInfo?.isVercel || activeServerInfo?.mode === 'cloud' ? (
-              <span
-                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs text-blue-300"
-                title="เชื่อมต่อผ่าน Cloud WebSocket เรียลไทม์ รองรับ Vercel และทุกโฮสติ้ง"
-              >
-                <span>☁️ Vercel Sync</span>
-              </span>
-            ) : (
-              <span
-                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-xs text-emerald-300"
-                title="เชื่อมต่อผ่านเซิร์ฟเวอร์หลัก (Live Sync)"
-              >
-                <span>⚡ Live Sync</span>
-              </span>
-            )}
+            <span
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs text-blue-300"
+              title="เชื่อมต่อผ่าน Cloud Real-time Sync รองรับ Vercel และทุกอุปกรณ์ 100%"
+            >
+              <span>☁️ Cloud & Vercel Sync</span>
+            </span>
 
             {/* Room Identifier */}
             <button
@@ -318,7 +309,7 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
                 </div>
 
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  เมื่อนำโปรเจกต์นี้ไปเปิดบน Vercel (เช่น <code className="text-cyan-300">xxx.vercel.app</code>) ระบบจะเปิดโหมด <strong className="text-emerald-300">Cloud Realtime Sync</strong> ให้อัตโนมัติ หน้าจอของคุณกับเพื่อนจะซิงค์กันสดๆ ทันที 100%!
+                  ระบบเชื่อมต่อผ่าน <strong className="text-emerald-300">Google Cloud Real-time Database</strong> โดยตรง หมดปัญหา WebSocket หลุดบน Vercel! ไม่ว่าจะเปิดบนคอมหรือมือถือ หน้าจอของคุณและเพื่อนจะซิงค์กันสดๆ ทันที 100%
                 </p>
 
                 {showServerDetails && (

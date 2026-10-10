@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Guild } from '../types.ts';
+import { db } from '../firebase.ts';
+import { doc, collection, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
 
 export interface RoomMember {
   id: string;
   name: string;
   color: string;
+  lastSeen?: number;
 }
 
 interface UseRealtimeSyncProps {
@@ -19,23 +22,21 @@ interface UseRealtimeSyncProps {
 const DEFAULT_ROOM_KEY = 'boss_tracker_current_room';
 const USERNAME_KEY = 'boss_tracker_user_name';
 const USER_ID_KEY = 'boss_tracker_user_id';
-export const CLOUD_WS_URL = 'wss://ais-pre-hma5z2hagu2ymws2ycvox3-768715595667.asia-southeast1.run.app/ws';
+export const CLOUD_WS_URL = 'Google Firebase Firestore (Live Cloud Sync)';
 export const CUSTOM_WS_STORAGE_KEY = 'boss_tracker_custom_ws_url';
 
+const PALETTE = ['#38bdf8', '#a855f7', '#ec4899', '#22c55e', '#f59e0b', '#06b6d4', '#e11d48', '#8b5cf6'];
+
+function getMemberColor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+  }
+  const idx = Math.abs(hash) % PALETTE.length;
+  return PALETTE[idx];
+}
+
 export function getResolvedWsUrl(): { url: string; mode: 'cloud' | 'local' | 'custom'; isVercel: boolean } {
-  // 1. Explicit VITE_WS_URL from environment (e.g. set in Vercel project settings)
-  const envUrl = (import.meta as any).env?.VITE_WS_URL;
-  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
-    return { url: envUrl.trim(), mode: 'custom', isVercel: false };
-  }
-
-  // 2. Custom WS URL saved in localStorage by user
-  const customUrl = localStorage.getItem(CUSTOM_WS_STORAGE_KEY);
-  if (customUrl && customUrl.trim()) {
-    return { url: customUrl.trim(), mode: 'custom', isVercel: false };
-  }
-
-  // 3. Vercel deployment detection
   const isVercel = typeof window !== 'undefined' && (
     window.location.hostname.includes('vercel.app') ||
     window.location.hostname.includes('now.sh') ||
@@ -43,13 +44,11 @@ export function getResolvedWsUrl(): { url: string; mode: 'cloud' | 'local' | 'cu
     window.location.hostname.includes('github.io')
   );
 
-  if (isVercel) {
-    return { url: CLOUD_WS_URL, mode: 'cloud', isVercel: true };
-  }
-
-  // 4. Default: current host's /ws endpoint
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return { url: `${protocol}//${window.location.host}/ws`, mode: 'local', isVercel: false };
+  return {
+    url: 'Google Cloud Firestore Real-time Sync',
+    mode: 'cloud',
+    isVercel,
+  };
 }
 
 function getOrGenerateUserId(): string {
@@ -62,31 +61,34 @@ function getOrGenerateUserId(): string {
 }
 
 function getInitialRoomId(): string {
-  // Check URL first (?room=xyz)
-  const params = new URLSearchParams(window.location.search);
-  const roomParam = params.get('room');
-  if (roomParam && roomParam.trim()) {
-    const clean = roomParam.trim().toLowerCase();
-    localStorage.setItem(DEFAULT_ROOM_KEY, clean);
-    return clean;
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const roomParam = params.get('room');
+    if (roomParam && roomParam.trim()) {
+      const clean = roomParam.trim().toLowerCase();
+      localStorage.setItem(DEFAULT_ROOM_KEY, clean);
+      return clean;
+    }
+    const saved = localStorage.getItem(DEFAULT_ROOM_KEY);
+    if (saved && saved.trim()) {
+      return saved.trim().toLowerCase();
+    }
   }
-  // Check localStorage
-  const saved = localStorage.getItem(DEFAULT_ROOM_KEY);
-  if (saved && saved.trim()) {
-    return saved.trim().toLowerCase();
-  }
-  // Default shared room
   return 'boss-squad-1';
 }
 
 function getInitialUserName(): string {
-  const saved = localStorage.getItem(USERNAME_KEY);
-  if (saved && saved.trim()) {
-    return saved.trim();
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem(USERNAME_KEY);
+    if (saved && saved.trim()) {
+      return saved.trim();
+    }
   }
   const defaultNames = ['หัวหน้ากิลด์', 'รองหัวหน้า', 'นักรบกิลด์', 'มือตีบอส', 'สมาชิกสายฟาร์ม', 'จอมเวทกิลด์'];
   const picked = defaultNames[Math.floor(Math.random() * defaultNames.length)];
-  localStorage.setItem(USERNAME_KEY, picked);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(USERNAME_KEY, picked);
+  }
   return picked;
 }
 
@@ -101,12 +103,13 @@ export function useRealtimeSync({
   const [roomId, setRoomId] = useState<string>(getInitialRoomId);
   const [userName, setUserNameState] = useState<string>(getInitialUserName);
   const [userId] = useState<string>(getOrGenerateUserId);
-  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [userColor] = useState<string>(() => getMemberColor(userId));
+  const [isConnected, setIsConnected] = useState<boolean>(true);
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [userCount, setUserCount] = useState<number>(1);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  const [activeServerInfo, setActiveServerInfo] = useState<{ mode: 'cloud' | 'local' | 'custom'; url: string; isVercel: boolean }>(getResolvedWsUrl);
+  const [activeServerInfo] = useState<{ mode: 'cloud' | 'local' | 'custom'; url: string; isVercel: boolean }>(getResolvedWsUrl);
 
   const setCustomWsUrl = useCallback((customUrl: string | null) => {
     if (customUrl && customUrl.trim()) {
@@ -114,18 +117,8 @@ export function useRealtimeSync({
     } else {
       localStorage.removeItem(CUSTOM_WS_STORAGE_KEY);
     }
-    setActiveServerInfo(getResolvedWsUrl());
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
   }, []);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isComponentMounted = useRef<boolean>(true);
-  const retryAttemptsRef = useRef<number>(0);
-
-  // Keep references to callbacks so effect doesn't re-trigger connection constantly
   const callbacksRef = useRef({
     onRemoteGuildsUpdate,
     onRemoteStatusChanged,
@@ -146,22 +139,40 @@ export function useRealtimeSync({
     };
   });
 
+  const isInitialSnapshotRef = useRef<boolean>(true);
+  const lastLocalUpdateTimestampRef = useRef<number>(0);
+
   const setUserName = useCallback((name: string) => {
     const clean = name.trim() || 'สมาชิกกิลด์';
     setUserNameState(clean);
     localStorage.setItem(USERNAME_KEY, clean);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'update_user_name',
+
+    // Update presence in Firestore
+    try {
+      const memberRef = doc(db, 'rooms', roomId, 'members', userId);
+      setDoc(
+        memberRef,
+        {
+          id: userId,
           name: clean,
-        })
-      );
-    }
-  }, []);
+          color: userColor,
+          lastSeen: Date.now(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch {}
+  }, [roomId, userId, userColor]);
 
   const switchRoom = useCallback((newRoom: string) => {
     const clean = (newRoom || 'boss-squad-1').trim().toLowerCase();
+    if (clean === roomId) return;
+
+    // Leave old room presence
+    try {
+      const oldMemberRef = doc(db, 'rooms', roomId, 'members', userId);
+      deleteDoc(oldMemberRef).catch(() => {});
+    } catch {}
+
     setRoomId(clean);
     localStorage.setItem(DEFAULT_ROOM_KEY, clean);
 
@@ -170,241 +181,186 @@ export function useRealtimeSync({
     url.searchParams.set('room', clean);
     window.history.replaceState({}, '', url.toString());
 
-    // Send join_room if socket already open
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const currentGuilds = callbacksRef.current.getCurrentGuilds();
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'join_room',
-          roomId: clean,
-          userId,
-          userName,
-          initialGuilds: currentGuilds,
-        })
-      );
-    }
-  }, [userId, userName]);
+    isInitialSnapshotRef.current = true;
+  }, [roomId, userId]);
 
-  // Connect WebSocket
+  // Firestore Realtime Subscription for Room & Members
   useEffect(() => {
-    isComponentMounted.current = true;
+    isInitialSnapshotRef.current = true;
+    setIsConnected(true);
 
-    function connect() {
-      if (!isComponentMounted.current) return;
-
-      const resolved = getResolvedWsUrl();
-      let targetWsUrl = resolved.url;
-
-      // If local connection failed twice, fallback to Cloud Run WebSocket so it seamlessly works on Vercel
-      if (retryAttemptsRef.current >= 2 && resolved.mode === 'local') {
-        targetWsUrl = CLOUD_WS_URL;
-        setActiveServerInfo({ mode: 'cloud', url: CLOUD_WS_URL, isVercel: resolved.isVercel });
-      } else {
-        setActiveServerInfo({ ...resolved, url: targetWsUrl });
+    // Sync room param into current URL if not matching
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('room') !== roomId) {
+        url.searchParams.set('room', roomId);
+        window.history.replaceState({}, '', url.toString());
       }
+    } catch {}
 
+    const roomDocRef = doc(db, 'rooms', roomId);
+    const membersColRef = collection(db, 'rooms', roomId, 'members');
+    const myMemberDocRef = doc(db, 'rooms', roomId, 'members', userId);
+
+    // 1. Send our presence
+    const sendPresence = async () => {
       try {
-        const ws = new WebSocket(targetWsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (!isComponentMounted.current) return;
-          retryAttemptsRef.current = 0;
-          setIsConnected(true);
-
-          // Sync URL with current roomId
-          const url = new URL(window.location.href);
-          if (url.searchParams.get('room') !== roomId) {
-            url.searchParams.set('room', roomId);
-            window.history.replaceState({}, '', url.toString());
-          }
-
-          // Send join message
-          const currentGuilds = callbacksRef.current.getCurrentGuilds();
-          ws.send(
-            JSON.stringify({
-              type: 'join_room',
-              roomId,
-              userId,
-              userName,
-              initialGuilds: currentGuilds,
-            })
-          );
-        };
-
-        ws.onmessage = (event) => {
-          if (!isComponentMounted.current) return;
-          try {
-            const data = JSON.parse(event.data);
-
-            switch (data.type) {
-              case 'room_state': {
-                if (Array.isArray(data.guilds)) {
-                  callbacksRef.current.onRemoteGuildsUpdate(data.guilds, 'ระบบกลาง', 'เชื่อมต่อห้องเรียลไทม์');
-                }
-                if (data.members) {
-                  setMembers(data.members);
-                }
-                if (data.userCount !== undefined) {
-                  setUserCount(data.userCount);
-                }
-                break;
-              }
-
-              case 'user_joined': {
-                if (data.members) setMembers(data.members);
-                if (data.userCount) setUserCount(data.userCount);
-                if (data.userName) {
-                  callbacksRef.current.onRemoteUserJoined(data.userName);
-                }
-                break;
-              }
-
-              case 'user_left': {
-                if (data.members) setMembers(data.members);
-                if (data.userCount) setUserCount(data.userCount);
-                break;
-              }
-
-              case 'members_updated': {
-                if (data.members) setMembers(data.members);
-                break;
-              }
-
-              case 'guilds_updated': {
-                if (Array.isArray(data.guilds)) {
-                  setIsSyncing(true);
-                  callbacksRef.current.onRemoteGuildsUpdate(
-                    data.guilds,
-                    data.senderName || 'เพื่อนในห้อง',
-                    data.actionDesc || 'อัปเดตข้อมูล'
-                  );
-                  setTimeout(() => setIsSyncing(false), 800);
-                }
-                break;
-              }
-
-              case 'guild_status_changed': {
-                setIsSyncing(true);
-                callbacksRef.current.onRemoteStatusChanged(
-                  data.guildId,
-                  data.status,
-                  data.guildName || '',
-                  data.senderName || 'เพื่อนในห้อง'
-                );
-                setTimeout(() => setIsSyncing(false), 800);
-                break;
-              }
-
-              case 'all_reset': {
-                setIsSyncing(true);
-                callbacksRef.current.onRemoteResetAll(data.senderName || 'เพื่อนในห้อง');
-                setTimeout(() => setIsSyncing(false), 800);
-                break;
-              }
-
-              case 'all_cleared': {
-                setIsSyncing(true);
-                callbacksRef.current.onRemoteClearedAll(data.senderName || 'เพื่อนในห้อง');
-                setTimeout(() => setIsSyncing(false), 800);
-                break;
-              }
-            }
-          } catch (err) {
-            console.error('Error handling WS message:', err);
-          }
-        };
-
-        ws.onclose = () => {
-          if (!isComponentMounted.current) return;
-          setIsConnected(false);
-          retryAttemptsRef.current++;
-          // Try reconnect after 2.5 seconds
-          if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-          reconnectTimeoutRef.current = setTimeout(connect, 2500);
-        };
-
-        ws.onerror = () => {
-          if (!isComponentMounted.current) return;
-          setIsConnected(false);
-          retryAttemptsRef.current++;
-          try {
-            ws.close();
-          } catch {}
-        };
+        await setDoc(
+          myMemberDocRef,
+          {
+            id: userId,
+            name: userName,
+            color: userColor,
+            lastSeen: Date.now(),
+          },
+          { merge: true }
+        );
       } catch (err) {
-        console.error('Failed to connect WebSocket:', err);
-        retryAttemptsRef.current++;
-        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(connect, 3000);
-      }
-    }
-
-    connect();
-
-    return () => {
-      isComponentMounted.current = false;
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+        console.warn('Presence sync note:', err);
       }
     };
-  }, [roomId, userId, userName]);
+    sendPresence();
 
-  // Outgoing broadcast helpers
+    // Heartbeat every 20 seconds to keep presence fresh
+    const heartbeatInterval = setInterval(sendPresence, 20000);
+
+    // 2. Subscribe to room state updates
+    const unsubscribeRoom = onSnapshot(
+      roomDocRef,
+      (snapshot) => {
+        setIsConnected(true);
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          if (Array.isArray(data.guilds)) {
+            // If update came from another user or it's our first load
+            if (data.updatedBy !== userId || isInitialSnapshotRef.current) {
+              setIsSyncing(true);
+              callbacksRef.current.onRemoteGuildsUpdate(
+                data.guilds,
+                data.lastUpdatedBy || 'เพื่อนในห้อง',
+                data.lastAction || 'อัปเดตข้อมูล'
+              );
+              setTimeout(() => setIsSyncing(false), 800);
+            }
+          }
+        } else {
+          // Document does not exist yet for this room: create it with local state
+          const initialGuilds = callbacksRef.current.getCurrentGuilds();
+          setDoc(
+            roomDocRef,
+            {
+              id: roomId,
+              guilds: initialGuilds,
+              lastUpdatedBy: userName,
+              updatedBy: userId,
+              lastAction: 'สร้างห้องเรียลไทม์',
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+        isInitialSnapshotRef.current = false;
+      },
+      (error) => {
+        console.error('Firestore room snapshot error:', error);
+      }
+    );
+
+    // 3. Subscribe to active room members
+    const unsubscribeMembers = onSnapshot(
+      membersColRef,
+      (snapshot) => {
+        const now = Date.now();
+        const activeMembers: RoomMember[] = [];
+
+        snapshot.forEach((docSnap) => {
+          const m = docSnap.data() as RoomMember;
+          // Active if seen within 60 seconds
+          if (m && m.id && (m.lastSeen ? now - m.lastSeen < 60000 : true)) {
+            activeMembers.push({
+              id: m.id,
+              name: m.id === userId ? `${userName} (คุณ)` : m.name || 'สมาชิก',
+              color: m.color || '#38bdf8',
+              lastSeen: m.lastSeen,
+            });
+          }
+        });
+
+        // Ensure current user is in list
+        if (!activeMembers.some((m) => m.id === userId)) {
+          activeMembers.unshift({
+            id: userId,
+            name: `${userName} (คุณ)`,
+            color: userColor,
+            lastSeen: now,
+          });
+        }
+
+        setMembers(activeMembers);
+        setUserCount(activeMembers.length);
+      },
+      (error) => {
+        console.error('Firestore members snapshot error:', error);
+      }
+    );
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      unsubscribeRoom();
+      unsubscribeMembers();
+
+      // Clean up presence on unmount
+      try {
+        deleteDoc(myMemberDocRef).catch(() => {});
+      } catch {}
+    };
+  }, [roomId, userId, userName, userColor]);
+
+  // Outgoing broadcast helpers that write to Firestore
   const broadcastGuildsUpdate = useCallback(
     (newGuilds: Guild[], actionDesc = 'อัปเดตรายการกิลด์') => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'update_guilds',
-            guilds: newGuilds,
-            actionDesc,
-          })
-        );
-      }
+      lastLocalUpdateTimestampRef.current = Date.now();
+      const roomDocRef = doc(db, 'rooms', roomId);
+      setDoc(
+        roomDocRef,
+        {
+          id: roomId,
+          guilds: newGuilds,
+          lastUpdatedBy: userName,
+          updatedBy: userId,
+          lastAction: actionDesc,
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      ).catch((err) => console.error('Error broadcasting guilds:', err));
     },
-    []
+    [roomId, userId, userName]
   );
 
   const broadcastToggleStatus = useCallback(
     (guildId: string | number, newStatus: boolean, guildName = '') => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'toggle_guild_status',
-            guildId,
-            status: newStatus,
-            guildName,
-          })
-        );
-      }
+      const current = callbacksRef.current.getCurrentGuilds();
+      const updated = current.map((g) => (g.id === guildId ? { ...g, cleared: newStatus } : g));
+      const actionDesc = newStatus ? `ตีบอส "${guildName}" สำเร็จ` : `ยกเลิกสถานะ "${guildName}"`;
+      broadcastGuildsUpdate(updated, actionDesc);
     },
-    []
+    [broadcastGuildsUpdate]
   );
 
   const broadcastResetAll = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'reset_all_guilds',
-        })
-      );
-    }
-  }, []);
+    const current = callbacksRef.current.getCurrentGuilds();
+    const updated = current.map((g) => ({ ...g, cleared: false }));
+    broadcastGuildsUpdate(updated, 'รีเซ็ตสถานะทุกกิลด์ประจำสัปดาห์');
+  }, [broadcastGuildsUpdate]);
 
   const broadcastMarkAllCleared = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'mark_all_guilds_cleared',
-        })
-      );
-    }
-  }, []);
+    const current = callbacksRef.current.getCurrentGuilds();
+    const updated = current.map((g) => ({ ...g, cleared: true }));
+    broadcastGuildsUpdate(updated, 'เคลียร์บอสทุกกิลด์ครบแล้ว');
+  }, [broadcastGuildsUpdate]);
 
   const getShareableLink = useCallback(() => {
+    if (typeof window === 'undefined') return '';
     const url = new URL(window.location.href);
     url.searchParams.set('room', roomId);
     return url.toString();

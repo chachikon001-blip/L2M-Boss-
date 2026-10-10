@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A shared real-time room tracking guild boss statuses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Room ID" },
+        "guilds": { "type": "array", "description": "List of guilds with boss clear statuses" },
+        "lastUpdatedBy": { "type": "string", "description": "Name of user who last modified room state" },
+        "lastAction": { "type": "string", "description": "Description of the last modification" },
+        "updatedAt": { "type": "number", "description": "Timestamp of the last modification" }
+      },
+      "required": ["id", "guilds", "updatedAt"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "An active member in a real-time room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User ID" },
+        "name": { "type": "string", "description": "Display name of the user" },
+        "color": { "type": "string", "description": "Badge color avatar" },
+        "lastSeen": { "type": "number", "description": "Heartbeat timestamp" }
+      },
+      "required": ["id", "name", "lastSeen"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Room document holding current guild boss checklist state"
+    },
+    "/rooms/{roomId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/Member" },
+      "description": "Online presence members in the room"
+    }
+  }
+}
