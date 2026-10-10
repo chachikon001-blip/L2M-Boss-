@@ -1,0 +1,6 @@
+{
+  "name": "Guild & Boss Tracker",
+  "description": "ระบบจดบันทึกและติดตามการตีบอสประจำสัปดาห์ พร้อมตัวนับเวลารีเซ็ตวันพุธ 05:00 น. และระบบจัดการสถานะกิลด์",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
