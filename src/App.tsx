@@ -134,6 +134,8 @@ export default function App() {
     broadcastResetAll,
     broadcastMarkAllCleared,
     getShareableLink,
+    activeServerInfo,
+    setCustomWsUrl,
   } = useRealtimeSync({
     getCurrentGuilds: () => guildsRef.current,
     onRemoteGuildsUpdate: (remoteGuilds, senderName, actionDesc) => {
@@ -490,6 +492,8 @@ export default function App() {
           userCount={userCount}
           members={members}
           userName={userName}
+          activeServerInfo={activeServerInfo}
+          onSetCustomWsUrl={setCustomWsUrl}
           onUpdateUserName={setUserName}
           onSwitchRoom={switchRoom}
           getShareableLink={getShareableLink}

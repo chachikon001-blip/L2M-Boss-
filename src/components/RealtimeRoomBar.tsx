@@ -10,6 +10,8 @@ interface RealtimeRoomBarProps {
   userCount: number;
   members: RoomMember[];
   userName: string;
+  activeServerInfo?: { mode: 'cloud' | 'local' | 'custom'; url: string; isVercel: boolean };
+  onSetCustomWsUrl?: (url: string | null) => void;
   onUpdateUserName: (name: string) => void;
   onSwitchRoom: (roomId: string) => void;
   getShareableLink: () => string;
@@ -23,6 +25,8 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
   userCount,
   members,
   userName,
+  activeServerInfo,
+  onSetCustomWsUrl,
   onUpdateUserName,
   onSwitchRoom,
   getShareableLink,
@@ -32,6 +36,8 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
   const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
   const [newRoomInput, setNewRoomInput] = useState('');
   const [newUserNameInput, setNewUserNameInput] = useState('');
+  const [showServerDetails, setShowServerDetails] = useState(false);
+  const [customUrlInput, setCustomUrlInput] = useState('');
 
   // Strictly deduplicate members by id to guarantee unique items
   const uniqueMembers = useMemo(() => {
@@ -113,6 +119,23 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
                 </span>
               )}
             </div>
+
+            {/* Vercel / Cloud Ready Indicator */}
+            {activeServerInfo?.isVercel || activeServerInfo?.mode === 'cloud' ? (
+              <span
+                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-950/60 border border-blue-500/30 text-xs text-blue-300"
+                title="เชื่อมต่อผ่าน Cloud WebSocket เรียลไทม์ รองรับ Vercel และทุกโฮสติ้ง"
+              >
+                <span>☁️ Vercel Sync</span>
+              </span>
+            ) : (
+              <span
+                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-xs text-emerald-300"
+                title="เชื่อมต่อผ่านเซิร์ฟเวอร์หลัก (Live Sync)"
+              >
+                <span>⚡ Live Sync</span>
+              </span>
+            )}
 
             {/* Room Identifier */}
             <button
@@ -278,6 +301,88 @@ export const RealtimeRoomBar: React.FC<RealtimeRoomBarProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Vercel & Realtime Server Deployment Info */}
+              <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                    <span>☁️ การแชร์บน Vercel และสถานะเซิร์ฟเวอร์</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowServerDetails(!showServerDetails)}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium"
+                  >
+                    {showServerDetails ? 'ซ่อนการตั้งค่า' : 'ดูวิธีเชื่อมต่อ Vercel'}
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  เมื่อนำโปรเจกต์นี้ไปเปิดบน Vercel (เช่น <code className="text-cyan-300">xxx.vercel.app</code>) ระบบจะเปิดโหมด <strong className="text-emerald-300">Cloud Realtime Sync</strong> ให้อัตโนมัติ หน้าจอของคุณกับเพื่อนจะซิงค์กันสดๆ ทันที 100%!
+                </p>
+
+                {showServerDetails && (
+                  <div className="mt-2.5 pt-2.5 border-t border-slate-800 space-y-2.5 text-[11px]">
+                    <div className="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-500/20 text-indigo-200">
+                      <strong>💡 ขั้นตอนแชร์บน Vercel:</strong>
+                      <ol className="list-decimal list-inside mt-1 space-y-0.5 text-slate-300">
+                        <li>นำโค้ดขึ้น GitHub แล้ว Import ไปยัง Vercel</li>
+                        <li>(มีไฟล์ <code className="text-cyan-300">vercel.json</code> พร้อมใช้งานแล้ว)</li>
+                        <li>เปิดลิงก์ Vercel แล้วกดปุ่ม <strong>"คัดลอกลิงก์ส่งให้เพื่อน"</strong> หน้าจอจะซิงค์กันทันที</li>
+                      </ol>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1">
+                        เซิร์ฟเวอร์ WebSocket ที่กำลังใช้งานอยู่:
+                      </label>
+                      <div className="font-mono text-[10px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800 break-all select-all">
+                        {activeServerInfo?.url || 'ws://...'}
+                      </div>
+                    </div>
+
+                    {onSetCustomWsUrl && (
+                      <div>
+                        <label className="block text-slate-400 mb-1">
+                          ใส่ Custom WebSocket Server URL (หากต้องการใช้เซิร์ฟเวอร์ส่วนตัว):
+                        </label>
+                        <div className="flex gap-1.5">
+                          <input
+                            type="text"
+                            value={customUrlInput}
+                            onChange={(e) => setCustomUrlInput(e.target.value)}
+                            placeholder="wss://your-backend.com/ws"
+                            className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-600 font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSetCustomWsUrl(customUrlInput.trim() || null);
+                              showToast('บันทึกการตั้งค่า WebSocket Server แล้ว!');
+                            }}
+                            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shrink-0"
+                          >
+                            บันทึก
+                          </button>
+                          {customUrlInput && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomUrlInput('');
+                                onSetCustomWsUrl(null);
+                                showToast('รีเซ็ตเป็นเซิร์ฟเวอร์ค่าเริ่มต้นแล้ว');
+                              }}
+                              className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs shrink-0"
+                            >
+                              รีเซ็ต
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Modal Buttons */}
               <div className="flex gap-2.5 pt-2">

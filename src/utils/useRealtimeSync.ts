@@ -19,6 +19,38 @@ interface UseRealtimeSyncProps {
 const DEFAULT_ROOM_KEY = 'boss_tracker_current_room';
 const USERNAME_KEY = 'boss_tracker_user_name';
 const USER_ID_KEY = 'boss_tracker_user_id';
+export const CLOUD_WS_URL = 'wss://ais-pre-hma5z2hagu2ymws2ycvox3-768715595667.asia-southeast1.run.app/ws';
+export const CUSTOM_WS_STORAGE_KEY = 'boss_tracker_custom_ws_url';
+
+export function getResolvedWsUrl(): { url: string; mode: 'cloud' | 'local' | 'custom'; isVercel: boolean } {
+  // 1. Explicit VITE_WS_URL from environment (e.g. set in Vercel project settings)
+  const envUrl = (import.meta as any).env?.VITE_WS_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    return { url: envUrl.trim(), mode: 'custom', isVercel: false };
+  }
+
+  // 2. Custom WS URL saved in localStorage by user
+  const customUrl = localStorage.getItem(CUSTOM_WS_STORAGE_KEY);
+  if (customUrl && customUrl.trim()) {
+    return { url: customUrl.trim(), mode: 'custom', isVercel: false };
+  }
+
+  // 3. Vercel deployment detection
+  const isVercel = typeof window !== 'undefined' && (
+    window.location.hostname.includes('vercel.app') ||
+    window.location.hostname.includes('now.sh') ||
+    window.location.hostname.includes('netlify.app') ||
+    window.location.hostname.includes('github.io')
+  );
+
+  if (isVercel) {
+    return { url: CLOUD_WS_URL, mode: 'cloud', isVercel: true };
+  }
+
+  // 4. Default: current host's /ws endpoint
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return { url: `${protocol}//${window.location.host}/ws`, mode: 'local', isVercel: false };
+}
 
 function getOrGenerateUserId(): string {
   let id = localStorage.getItem(USER_ID_KEY);
@@ -74,9 +106,24 @@ export function useRealtimeSync({
   const [userCount, setUserCount] = useState<number>(1);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
+  const [activeServerInfo, setActiveServerInfo] = useState<{ mode: 'cloud' | 'local' | 'custom'; url: string; isVercel: boolean }>(getResolvedWsUrl);
+
+  const setCustomWsUrl = useCallback((customUrl: string | null) => {
+    if (customUrl && customUrl.trim()) {
+      localStorage.setItem(CUSTOM_WS_STORAGE_KEY, customUrl.trim());
+    } else {
+      localStorage.removeItem(CUSTOM_WS_STORAGE_KEY);
+    }
+    setActiveServerInfo(getResolvedWsUrl());
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+  }, []);
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isComponentMounted = useRef<boolean>(true);
+  const retryAttemptsRef = useRef<number>(0);
 
   // Keep references to callbacks so effect doesn't re-trigger connection constantly
   const callbacksRef = useRef({
@@ -145,15 +192,24 @@ export function useRealtimeSync({
     function connect() {
       if (!isComponentMounted.current) return;
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const resolved = getResolvedWsUrl();
+      let targetWsUrl = resolved.url;
+
+      // If local connection failed twice, fallback to Cloud Run WebSocket so it seamlessly works on Vercel
+      if (retryAttemptsRef.current >= 2 && resolved.mode === 'local') {
+        targetWsUrl = CLOUD_WS_URL;
+        setActiveServerInfo({ mode: 'cloud', url: CLOUD_WS_URL, isVercel: resolved.isVercel });
+      } else {
+        setActiveServerInfo({ ...resolved, url: targetWsUrl });
+      }
 
       try {
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(targetWsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
           if (!isComponentMounted.current) return;
+          retryAttemptsRef.current = 0;
           setIsConnected(true);
 
           // Sync URL with current roomId
@@ -262,20 +318,25 @@ export function useRealtimeSync({
         ws.onclose = () => {
           if (!isComponentMounted.current) return;
           setIsConnected(false);
-          // Try reconnect after 3 seconds
+          retryAttemptsRef.current++;
+          // Try reconnect after 2.5 seconds
           if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+          reconnectTimeoutRef.current = setTimeout(connect, 2500);
         };
 
         ws.onerror = () => {
           if (!isComponentMounted.current) return;
           setIsConnected(false);
-          ws.close();
+          retryAttemptsRef.current++;
+          try {
+            ws.close();
+          } catch {}
         };
       } catch (err) {
         console.error('Failed to connect WebSocket:', err);
+        retryAttemptsRef.current++;
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(connect, 4000);
+        reconnectTimeoutRef.current = setTimeout(connect, 3000);
       }
     }
 
@@ -363,5 +424,7 @@ export function useRealtimeSync({
     broadcastResetAll,
     broadcastMarkAllCleared,
     getShareableLink,
+    activeServerInfo,
+    setCustomWsUrl,
   };
 }
